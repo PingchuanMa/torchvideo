@@ -15,7 +15,6 @@ import collections
 import warnings
 
 from . import functional as F
-from torchvision import transforms
 
 if sys.version_info < (3, 3):
     Sequence = collections.Sequence
@@ -25,111 +24,524 @@ else:
     Iterable = collections.abc.Iterable
 
 
-class RandomCrop(transforms.RandomCrop):
+__all__ = ["Compose", "ToTensor", "ToPILImage", "Normalize", "Resize", "Scale", "CenterCrop", "Pad",
+           "Lambda", "RandomApply", "RandomChoice", "RandomOrder", "RandomCrop", "RandomHorizontalFlip",
+           "RandomVerticalFlip", "RandomResizedCrop", "RandomSizedCrop", "FiveCrop", "TenCrop", "LinearTransformation",
+           "ColorJitter", "RandomRotation", "RandomAffine", "Grayscale", "RandomGrayscale"]
+
+_pil_interpolation_to_str = {
+    Image.NEAREST: 'PIL.Image.NEAREST',
+    Image.BILINEAR: 'PIL.Image.BILINEAR',
+    Image.BICUBIC: 'PIL.Image.BICUBIC',
+    Image.LANCZOS: 'PIL.Image.LANCZOS',
+    Image.HAMMING: 'PIL.Image.HAMMING',
+    Image.BOX: 'PIL.Image.BOX',
+}
+
+
+class Compose(object):
+    """Composes several transforms together.
+
+    Args:
+        transforms (list of ``Transform`` objects): list of transforms to compose.
+
+    Example:
+        >>> transforms.Compose([
+        >>>     transforms.CenterCrop(10),
+        >>>     transforms.ToTensor(),
+        >>> ])
+    """
+
+    def __init__(self, transforms):
+        self.transforms = transforms
+
+    def __call__(self, vid):
+        for t in self.transforms:
+            vid = t(vid)
+        return vid
+
+    def __repr__(self):
+        format_string = self.__class__.__name__ + '('
+        for t in self.transforms:
+            format_string += '\n'
+            format_string += '    {0}'.format(t)
+        format_string += '\n)'
+        return format_string
+
+
+class ToTensor(object):
+    """Convert a ``PIL Image`` or ``numpy.ndarray`` to tensor.
+
+    Converts a PIL Image or numpy.ndarray (H x W x C) in the range
+    [0, 255] to a torch.FloatTensor of shape (C x H x W) in the range [0.0, 1.0]
+    if the PIL Image belongs to one of the modes (L, LA, P, I, F, RGB, YCbCr, RGBA, CMYK, 1)
+    or if the numpy.ndarray has dtype = np.uint8
+
+    In the other cases, tensors are returned without scaling.
+    """
+
+    def __call__(self, vid):
+        """
+        Args:
+            vid (list of PIL Image or list of numpy.ndarray): Image to be converted to tensor.
+
+        Returns:
+            Tensor: Converted image.
+        """
+        return F.to_tensor(vid)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '()'
+
+
+class ToPILImage(object):
+    """Convert a tensor or an ndarray to PIL Image.
+
+    Converts a torch.*Tensor of shape C x H x W or a numpy ndarray of shape
+    H x W x C to a PIL Image while preserving the value range.
+
+    Args:
+        mode (`PIL.Image mode`_): color space and pixel depth of input data (optional).
+            If ``mode`` is ``None`` (default) there are some assumptions made about the input data:
+             - If the input has 4 channels, the ``mode`` is assumed to be ``RGBA``.
+             - If the input has 3 channels, the ``mode`` is assumed to be ``RGB``.
+             - If the input has 2 channels, the ``mode`` is assumed to be ``LA``.
+             - If the input has 1 channel, the ``mode`` is determined by the data type (i.e ``int``, ``float``,
+              ``short``).
+
+    .. _PIL.Image mode: https://pillow.readthedocs.io/en/latest/handbook/concepts.html#concept-modes
+    """
+    def __init__(self, mode=None):
+        self.mode = mode
+
+    def __call__(self, pic):
+        """
+        Args:
+            pic (Tensor or list of numpy.ndarray): Image to be converted to PIL Image.
+
+        Returns:
+            PIL Image: Image converted to PIL Image.
+
+        """
+        return F.to_pil_image(pic, self.mode)
+
+    def __repr__(self):
+        format_string = self.__class__.__name__ + '('
+        if self.mode is not None:
+            format_string += 'mode={0}'.format(self.mode)
+        format_string += ')'
+        return format_string
+
+
+class Normalize(object):
+    """Normalize a tensor image with mean and standard deviation.
+    Given mean: ``(M1,...,Mn)`` and std: ``(S1,..,Sn)`` for ``n`` channels, this transform
+    will normalize each channel of the input ``torch.*Tensor`` i.e.
+    ``input[channel] = (input[channel] - mean[channel]) / std[channel]``
+
+    .. note::
+        This transform acts out of place, i.e., it does not mutates the input tensor.
+
+    Args:
+        mean (sequence): Sequence of means for each channel.
+        std (sequence): Sequence of standard deviations for each channel.
+    """
+
+    def __init__(self, mean, std, inplace=False):
+        self.mean = mean
+        self.std = std
+        self.inplace = inplace
+
+    def __call__(self, tensor):
+        """
+        Args:
+            tensor (Tensor): Tensor image of size (C, H, W) to be normalized.
+
+        Returns:
+            Tensor: Normalized Tensor image.
+        """
+        return F.normalize(tensor, self.mean, self.std, self.inplace)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(mean={0}, std={1})'.format(self.mean, self.std)
+
+
+class Resize(object):
+    """Resize the input PIL Image to the given size.
+
+    Args:
+        size (sequence or int): Desired output size. If size is a sequence like
+            (h, w), output size will be matched to this. If size is an int,
+            smaller edge of the image will be matched to this number.
+            i.e, if height > width, then image will be rescaled to
+            (size * height / width, size)
+        interpolation (int, optional): Desired interpolation. Default is
+            ``PIL.Image.BILINEAR``
+    """
+
+    def __init__(self, size, interpolation=Image.BILINEAR):
+        assert isinstance(size, int) or (isinstance(size, Iterable) and len(size) == 2)
+        self.size = size
+        self.interpolation = interpolation
+
+    def __call__(self, vid):
+        """
+        Args:
+            vid (list of PIL Image): Images to be scaled.
+
+        Returns:
+            list of PIL Image: Rescaled images.
+        """
+        return [F.resize(img, self.size, self.interpolation) for img in vid]
+
+    def __repr__(self):
+        interpolate_str = _pil_interpolation_to_str[self.interpolation]
+        return self.__class__.__name__ + '(size={0}, interpolation={1})'.format(self.size, interpolate_str)
+
+
+class Scale(Resize):
+    """
+    Note: This transform is deprecated in favor of Resize.
+    """
     def __init__(self, *args, **kwargs):
-        super(RandomCrop, self).__init__(*args, **kwargs)
-        self.playing = False
-
-    def get_params(self, img, output_size):
-        while True:
-            w, h = img.size
-            th, tw = output_size
-            i = random.randint(0, h - th)
-            j = random.randint(0, w - tw)
-            self.playing = True
-            while self.playing:
-                yield i, j, th, tw
-
-    def __call__(self, imgs):
-        self.playing = False
-        return list(map(super(RandomCrop, self).__call__, imgs))
+        warnings.warn("The use of the transforms.Scale transform is deprecated, " +
+                      "please use transforms.Resize instead.")
+        super(Scale, self).__init__(*args, **kwargs)
 
 
-class CenterCrop(transforms.CenterCrop):
-    def __init__(self, *args, **kwargs):
-        super(CenterCrop, self).__init__(*args, **kwargs)
+class CenterCrop(object):
+    """Crops the given PIL Image at the center.
 
-    def __call__(self, imgs):
-        return list(map(super(CenterCrop, self).__call__, imgs))
+    Args:
+        size (sequence or int): Desired output size of the crop. If size is an
+            int instead of sequence like (h, w), a square crop (size, size) is
+            made.
+    """
+
+    def __init__(self, size):
+        if isinstance(size, numbers.Number):
+            self.size = (int(size), int(size))
+        else:
+            self.size = size
+
+    def __call__(self, vid):
+        """
+        Args:
+            vid (list of PIL Image): Images to be cropped.
+
+        Returns:
+            list of PIL Image: Cropped images.
+        """
+        return [F.center_crop(img, self.size) for img in vid]
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(size={0})'.format(self.size)
 
 
-class RandomHorizontalFlip(transforms.RandomHorizontalFlip):
+class Pad(object):
+    """Pad the given PIL Image on all sides with the given "pad" value.
+
+    Args:
+        padding (int or tuple): Padding on each border. If a single int is provided this
+            is used to pad all borders. If tuple of length 2 is provided this is the padding
+            on left/right and top/bottom respectively. If a tuple of length 4 is provided
+            this is the padding for the left, top, right and bottom borders
+            respectively.
+        fill (int or tuple): Pixel fill value for constant fill. Default is 0. If a tuple of
+            length 3, it is used to fill R, G, B channels respectively.
+            This value is only used when the padding_mode is constant
+        padding_mode (str): Type of padding. Should be: constant, edge, reflect or symmetric.
+            Default is constant.
+
+            - constant: pads with a constant value, this value is specified with fill
+
+            - edge: pads with the last value at the edge of the image
+
+            - reflect: pads with reflection of image without repeating the last value on the edge
+
+                For example, padding [1, 2, 3, 4] with 2 elements on both sides in reflect mode
+                will result in [3, 2, 1, 2, 3, 4, 3, 2]
+
+            - symmetric: pads with reflection of image repeating the last value on the edge
+
+                For example, padding [1, 2, 3, 4] with 2 elements on both sides in symmetric mode
+                will result in [2, 1, 1, 2, 3, 4, 4, 3]
+    """
+
+    def __init__(self, padding, fill=0, padding_mode='constant'):
+        assert isinstance(padding, (numbers.Number, tuple))
+        assert isinstance(fill, (numbers.Number, str, tuple))
+        assert padding_mode in ['constant', 'edge', 'reflect', 'symmetric']
+        if isinstance(padding, Sequence) and len(padding) not in [2, 4]:
+            raise ValueError("Padding must be an int or a 2, or 4 element tuple, not a " +
+                             "{} element tuple".format(len(padding)))
+
+        self.padding = padding
+        self.fill = fill
+        self.padding_mode = padding_mode
+
+    def __call__(self, vid):
+        """
+        Args:
+            vid (list of PIL Image): Images to be padded.
+
+        Returns:
+            list of PIL Image: Padded images.
+        """
+        return [F.pad(img, self.padding, self.fill, self.padding_mode) for img in vid]
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(padding={0}, fill={1}, padding_mode={2})'.\
+            format(self.padding, self.fill, self.padding_mode)
+
+
+class Lambda(object):
+    """Apply a user-defined lambda as a transform.
+
+    Args:
+        lambd (function): Lambda/function to be used for transform.
+    """
+
+    def __init__(self, lambd):
+        assert callable(lambd), repr(type(lambd).__name__) + " object is not callable"
+        self.lambd = lambd
+
+    def __call__(self, vid):
+        return [self.lambd(img) for img in vid]
+
+    def __repr__(self):
+        return self.__class__.__name__ + '()'
+
+
+class RandomTransforms(object):
+    """Base class for a list of transformations with randomness
+
+    Args:
+        transforms (list or tuple): list of transformations
+    """
+
+    def __init__(self, transforms):
+        assert isinstance(transforms, (list, tuple))
+        self.transforms = transforms
+
+    @staticmethod
+    def _apply(transforms, img):
+        for t in transforms:
+            img = t(img)
+        return img
+
+    def __call__(self, *args, **kwargs):
+        raise NotImplementedError()
+
+    def __repr__(self):
+        format_string = self.__class__.__name__ + '('
+        for t in self.transforms:
+            format_string += '\n'
+            format_string += '    {0}'.format(t)
+        format_string += '\n)'
+        return format_string
+
+
+class RandomApply(RandomTransforms):
+    """Apply randomly a list of transformations with a given probability
+
+    Args:
+        transforms (list or tuple): list of transformations
+        p (float): probability
+    """
+
+    def __init__(self, transforms, p=0.5):
+        super(RandomApply, self).__init__(transforms)
+        self.p = p
+
+    def __call__(self, vid):
+        if self.p < random.random():
+            return vid
+        return [self._apply(self.transforms, img) for img in vid]
+
+    def __repr__(self):
+        format_string = self.__class__.__name__ + '('
+        format_string += '\n    p={}'.format(self.p)
+        for t in self.transforms:
+            format_string += '\n'
+            format_string += '    {0}'.format(t)
+        format_string += '\n)'
+        return format_string
+
+
+class RandomOrder(RandomTransforms):
+    """Apply a list of transformations in a random order
+    """
+    def __call__(self, vid):
+        order = list(range(len(self.transforms)))
+        random.shuffle(order)
+        return [self._apply(self._random_iter(order), img) for img in vid]
+
+    def _random_iter(self, order):
+        for i in order:
+            yield self.transforms[i]
+
+
+class RandomChoice(RandomTransforms):
+    """Apply single transformation randomly picked from a list
+    """
+    def __call__(self, vid):
+        t = random.choice(self.transforms)
+        return [t(img) for img in vid]
+
+
+class RandomCrop(object):
+    """Crop the given PIL Image at a random location.
+
+    Args:
+        size (sequence or int): Desired output size of the crop. If size is an
+            int instead of sequence like (h, w), a square crop (size, size) is
+            made.
+        padding (int or sequence, optional): Optional padding on each border
+            of the image. Default is None, i.e no padding. If a sequence of length
+            4 is provided, it is used to pad left, top, right, bottom borders
+            respectively. If a sequence of length 2 is provided, it is used to
+            pad left/right, top/bottom borders, respectively.
+        pad_if_needed (boolean): It will pad the image if smaller than the
+            desired size to avoid raising an exception.
+        fill: Pixel fill value for constant fill. Default is 0. If a tuple of
+            length 3, it is used to fill R, G, B channels respectively.
+            This value is only used when the padding_mode is constant
+        padding_mode: Type of padding. Should be: constant, edge, reflect or symmetric. Default is constant.
+
+             - constant: pads with a constant value, this value is specified with fill
+
+             - edge: pads with the last value on the edge of the image
+
+             - reflect: pads with reflection of image (without repeating the last value on the edge)
+
+                padding [1, 2, 3, 4] with 2 elements on both sides in reflect mode
+                will result in [3, 2, 1, 2, 3, 4, 3, 2]
+
+             - symmetric: pads with reflection of image (repeating the last value on the edge)
+
+                padding [1, 2, 3, 4] with 2 elements on both sides in symmetric mode
+                will result in [2, 1, 1, 2, 3, 4, 4, 3]
+
+    """
+
+    def __init__(self, size, padding=None, pad_if_needed=False, fill=0, padding_mode='constant'):
+        if isinstance(size, numbers.Number):
+            self.size = (int(size), int(size))
+        else:
+            self.size = size
+        self.padding = padding
+        self.pad_if_needed = pad_if_needed
+        self.fill = fill
+        self.padding_mode = padding_mode
+
+    @staticmethod
+    def get_params(img, output_size):
+        """Get parameters for ``crop`` for a random crop.
+
+        Args:
+            img (PIL Image): Image to be cropped.
+            output_size (tuple): Expected output size of the crop.
+
+        Returns:
+            tuple: params (i, j, h, w) to be passed to ``crop`` for random crop.
+        """
+        w, h = img.size
+        th, tw = output_size
+        if w == tw and h == th:
+            return 0, 0, h, w
+
+        i = random.randint(0, h - th)
+        j = random.randint(0, w - tw)
+        return i, j, th, tw
+
+    def __call__(self, vid):
+        """
+        Args:
+            vid (list): Images to be cropped.
+
+        Returns:
+            list: Cropped images.
+        """
+        if self.padding is not None:
+            vid = [F.pad(img, self.padding, self.fill, self.padding_mode) for img in vid]
+
+        # pad the width if needed
+        if self.pad_if_needed and vid[0].size[0] < self.size[1]:
+            vid = [F.pad(img, (self.size[1] - img.size[0], 0), self.fill, self.padding_mode) for img in vid]
+        # pad the height if needed
+        if self.pad_if_needed and vid[0].size[1] < self.size[0]:
+            vid = [F.pad(img, (0, self.size[0] - img.size[1]), self.fill, self.padding_mode) for img in vid]
+
+        i, j, h, w = self.get_params(vid[0], self.size)
+
+        return [F.crop(img, i, j, h, w) for img in vid]
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(size={0}, padding={1})'.format(self.size, self.padding)
+
+
+class RandomHorizontalFlip(object):
     """Horizontally flip the given PIL Images randomly with a given probability.
 
     Args:
         p (float): probability of the images being flipped. Default value is 0.5
-        is_flow (bool): whether the input data is optical flow or not. Default
-            value is False.
+        flow (bool): whether the input data is optical flow or not. It should be
+            explicitly assigned since a grayscale video also consists of `L`-mode
+            images. Default value is False.
     """
-    def __init__(self, p=0.5, is_flow=False):
-        super(RandomHorizontalFlip, self).__init__(p)
-        self.is_flow = is_flow
+    def __init__(self, p=0.5, flow=False):
+        self.p = p
+        self.flow = flow
 
-    def __call__(self, imgs):
+    def __call__(self, vid):
         """
         Args:
-            imgs (List of PIL Images): Images to be flipped.
+            vid (list of PIL Image): Images to be flipped.
 
         Returns:
-            List of PIL Images: Randomly flipped images.
+            list of PIL Image: Randomly flipped images.
         """
-        if random.random() >= self.p:
-            return imgs
-        imgs = list(map(F.hflip, imgs))
-        if self.is_flow:
-            for i in range(0, len(imgs), 2):
-                # invert flow pixel values when flipping
-                imgs[i] = ImageOps.invert(imgs[i])
-        return imgs
+        if self.p < random.random():
+            return vid
+        if self.flow:
+            return [F.invert(F.hflip(img)) if i % 2 == 0 else F.hflip(img) for i, img in enumerate(vid)]
+        return list(map(F.hflip, vid))
 
     def __repr__(self):
         return self.__class__.__name__ + '(p={0}, is_flow={1})'.format(self.p, self.is_flow)
 
 
-class Normalize2d(transforms.Normalize):
-    def __init__(self, *args, **kwargs):
-        super(Normalize2d, self).__init__(*args, **kwargs)
+class RandomVerticalFlip(object):
+    """Vertically flip the given PIL Image randomly with a given probability.
 
-    def __call__(self, tensor):
+    Args:
+        p (float): probability of the image being flipped. Default value is 0.5
+        flow (bool): whether the input data is optical flow or not. It should be
+            explicitly assigned since a grayscale video also consists of `L`-mode
+            images. Default value is False.
+    """
+
+    def __init__(self, p=0.5, flow=False):
+        self.p = p
+        self.flow = flow
+
+    def __call__(self, vid):
         """
         Args:
-            tensor (Tensor): Tensor images of size (T * C, H, W) to be normalized.
+            vid (list of PIL Image): Images to be flipped.
 
         Returns:
-            Tensor: Normalized Tensor images.
+            list of PIL Image: Randomly flipped images.
         """
-        mean = self.mean * (tensor.size()[0] // len(self.mean))
-        std = self.std * (tensor.size()[0] // len(self.std))
-        mean = torch.tensor(mean, dtype=torch.float32)
-        std = torch.tensor(std, dtype=torch.float32)
-        tensor.sub_(mean[:, None, None]).div_(std[:, None, None])
-        return tensor
+        if self.p < random.random():
+            return vid
+        if self.flow:
+            return [F.invert(F.vflip(img)) if i % 2 == 1 else F.hflip(img) for i, img in enumerate(vid)]
+        return list(map(F.hflip, vid))
 
-
-class Normalize3d(transforms.Normalize):
-    def __init__(self, *args, **kwargs):
-        super(Normalize3d, self).__init__(*args, **kwargs)
-
-    def __call__(self, tensor):
-        """
-        Args:
-            tensor (Tensor): Tensor images of size (C, T, H, W) to be normalized.
-
-        Returns:
-            Tensor: Normalized Tensor images.
-        """
-        mean = torch.tensor(self.mean, dtype=torch.float32)
-        std = torch.tensor(self.std, dtype=torch.float32)
-        tensor.sub_(mean[:, None, None, None]).div_(std[:, None, None, None])
-        return tensor
-
-
-class Resize(transforms.Resize):
-    def __init__(self, *args, **kwargs):
-        super(Resize, self).__init__(*args, **kwargs)
-
-    def __call__(self, imgs):
-        return list(map(super(Resize, self).__call__, imgs))
+    def __repr__(self):
+        return self.__class__.__name__ + '(p={})'.format(self.p)
 
 
 class GroupMultiScaleCrop(object):
@@ -183,8 +595,7 @@ class GroupMultiScaleCrop(object):
 
         crop_w, crop_h, offset_w, offset_h = self._sample_crop_size(im_size[0], im_size[1])
         ret = [img.crop(
-            (offset_w, offset_h, offset_w + crop_w, offset_h + crop_h)).resize(
-            (self.input_size[0], self.input_size[1]), self.interpolation) for img in img_group]
+            (offset_w, offset_h, offset_w + crop_w, offset_h + crop_h)) for img in img_group]
         return ret
 
     def _sample_crop_size(self, image_w, image_h):

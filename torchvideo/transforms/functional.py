@@ -181,6 +181,21 @@ def to_pil_image(pic, mode=None):
     return Image.fromarray(npimg, mode=mode)
 
 
+def _make_normalizer(tensor, operand):
+    """Repeat mean/std expected times and build it a tensor.
+
+    Args:
+        tensor (Tensor): Tensor to be normalized.
+        operand (list): Mean or standard variance of image.
+
+    Returns:
+        Tensor: A tensor to broadcast.
+    """
+    operand *= tensor.size(0) // len(operand)
+    operand = torch.tensor(operand, dtype=torch.float32)
+    return operand.view((-1,) + (1,) * (tensor.dim() - 1))
+
+
 def normalize(tensor, mean, std, inplace=False):
     """Normalize a tensor image with mean and standard deviation.
 
@@ -204,9 +219,9 @@ def normalize(tensor, mean, std, inplace=False):
     if not inplace:
         tensor = tensor.clone()
 
-    mean = torch.tensor(mean, dtype=torch.float32)
-    std = torch.tensor(std, dtype=torch.float32)
-    tensor.sub_(mean[:, None, None]).div_(std[:, None, None])
+    mean = _make_normalizer(tensor, mean)
+    std = _make_normalizer(tensor, std)
+    tensor.sub_(mean).div_(std)
     return tensor
 
 
@@ -421,6 +436,21 @@ def vflip(img):
         raise TypeError('img should be PIL Image. Got {}'.format(type(img)))
 
     return img.transpose(Image.FLIP_TOP_BOTTOM)
+
+
+def invert(img):
+    """Invert the given PIL Image.
+
+    Args:
+        img (PIL Image): Image to be inverted.
+
+    Returns:
+        PIL Image:  Inverted image.
+    """
+    if not _is_pil_image(img):
+        raise TypeError('img should be PIL Image. Got {}'.format(type(img)))
+
+    return ImageOps.invert(img)
 
 
 def five_crop(img, size):
