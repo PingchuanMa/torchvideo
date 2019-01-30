@@ -35,36 +35,111 @@ def _is_numpy_image(img):
     return isinstance(img, np.ndarray) and (img.ndim in {2, 3})
 
 
-def to_tensor(pic):
-    """Convert a ``PIL Image`` or ``numpy.ndarray`` to tensor.
+def to_tensor2d(vid, is_flow=False):
+    """Convert a list of ``PIL Image`` or ``numpy.ndarray`` to tensor for 2d neural networks.
 
     See ``ToTensor`` for more details.
 
     Args:
-        pic (PIL Image or numpy.ndarray): Image to be converted to tensor.
+        vid (list of PIL Image or numpy.ndarray): Images to be converted to tensor.
+        is_flow (bool): Whether pic is an optical flow or not.
 
     Returns:
-        Tensor: Converted image.
+        Tensor: Converted images in shape of [T, C, H, W].
     """
-    if not(_is_pil_image(pic) or _is_numpy_image(pic)):
-        raise TypeError('pic should be PIL Image or ndarray. Got {}'.format(type(pic)))
+    if not(all(_is_pil_image(pic) for pic in vid) or all(_is_numpy_image(pic) for pic in vid)):
+        raise TypeError('pics in vid should be all PIL Image or ndarray. Got {}'.format(
+            [type(pic) for pic in vid]))
 
-    if isinstance(pic, np.ndarray):
-        # handle numpy array
-        if pic.ndim == 2:
-            pic = pic[:, :, None]
-
-        img = torch.from_numpy(pic.transpose((2, 0, 1)))
-        # backward compatibility
-        if isinstance(img, torch.ByteTensor):
-            return img.float().div(255)
+    if isinstance(vid[0], np.ndarray):
+        # stack list to numpy.ndarray then torch.tensor
+        if is_flow:
+            vid = np.stack(vid, axis=0).reshape((-1, 2) + vid[0].shape)
+        elif vid[0].ndim == 2:
+            vid = np.expand_dims(np.stack(vid, axis=0), 1)
         else:
-            return img
+            vid = np.concatenate(vid, axis=2).transpose((2, 0, 1))
 
-    if accimage is not None and isinstance(pic, accimage.Image):
-        nppic = np.zeros([pic.channels, pic.height, pic.width], dtype=np.float32)
-        pic.copyto(nppic)
-        return torch.from_numpy(nppic)
+        vid = torch.from_numpy(vid)
+        # backward compatibility
+        if isinstance(vid, torch.ByteTensor):
+            return vid.float().div(255)
+        else:
+            return vid
+
+    if accimage is not None and isinstance(vid[0], accimage.Image):
+        nchannel = vid[0].channels
+        npvid = np.zeros([len(vid) * nchannel, vid[0].height, vid[0].width], dtype=np.float32)
+        for i, pic in enumerate(vid):
+            pic.copyto(npvid[i * nchannel: (i + 1) * nchannel, ...])
+        return torch.from_numpy(npvid)
+
+    # handle PIL Image
+    pic_mode = vid[0].mode
+    if pic_mode == 'I':
+        img = torch.from_numpy(np.stack(vid, axis=0).astype(np.int32))
+    elif pic_mode == 'I;16':
+        img = torch.from_numpy(np.stack(vid, axis=0).astype(np.int16))
+    elif pic_mode == 'F':
+        img = torch.from_numpy(np.stack(vid, axis=0).astype(np.float32))
+    elif pic_mode == '1':
+        img = 255 * torch.from_numpy(np.stack(vid, axis=0).astype(np.uint8))
+    else:
+        img = torch.ByteTensor(torch.ByteStorage.from_buffer(pic.tobytes()))
+    # PIL image mode: L, LA, P, I, F, RGB, YCbCr, RGBA, CMYK
+    if pic_mode == 'YCbCr':
+        nchannel = 3
+    elif pic_mode == 'I;16':
+        nchannel = 1
+    else:
+        nchannel = len(pic_mode)
+    img = img.view(pic.size[1], pic.size[0], nchannel)
+    # put it from HWC to CHW format
+    # yikes, this transpose takes 80% of the loading time/CPU
+    img = img.transpose(0, 1).transpose(0, 2).contiguous()
+    if isinstance(img, torch.ByteTensor):
+        return img.float().div(255)
+    else:
+        return img
+
+
+def to_tensor3d(vid, is_flow=False):
+    """Convert a list of ``PIL Image`` or ``numpy.ndarray`` to tensor for 3d neural networks.
+
+    See ``ToTensor`` for more details.
+
+    Args:
+        vid (list of PIL Image or numpy.ndarray): Images to be converted to tensor.
+        is_flow (bool): Whether pic is an optical flow or not.
+
+    Returns:
+        Tensor: Converted images in shape of [C, T, H, W].
+    """
+    if not(all(_is_pil_image(pic) for pic in vid) or all(_is_numpy_image(pic) for pic in vid)):
+        raise TypeError('pics in vid should be all PIL Image or ndarray. Got {}'.format(
+            [type(pic) for pic in vid]))
+
+    if isinstance(vid[0], np.ndarray):
+        # stack list to numpy.ndarray then torch.tensor
+        if vid[0].ndim == 2:
+            vid = np.stack(vid, axis=0)
+            vid = torch.from_numpy(vid)
+        else:
+            vid = np.concatenate(vid, axis=2)
+            vid = torch.from_numpy(vid.transpose((2, 0, 1)))
+
+        # backward compatibility
+        if isinstance(vid, torch.ByteTensor):
+            return vid.float().div(255)
+        else:
+            return vid
+
+    if accimage is not None and isinstance(vid[0], accimage.Image):
+        nchannel = vid[0].channels
+        npvid = np.zeros([len(vid) * nchannel, vid[0].height, vid[0].width], dtype=np.float32)
+        for i, pic in enumerate(vid):
+            pic.copyto(npvid[i * nchannel: (i + 1) * nchannel, ...])
+        return torch.from_numpy(npvid)
 
     # handle PIL Image
     if pic.mode == 'I':
